@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, field
 
 from common import (
+    BASE_DAMAGE,
     BROADCAST_RATE,
     BULLET_RADIUS,
     BULLET_SPEED,
@@ -14,9 +15,13 @@ from common import (
     MATCH_SECONDS,
     MAX_PLAYERS,
     MIN_PLAYERS_TO_START,
+    PICKUP_RADIUS,
+    PICKUP_RESPAWN_TIME,
     PLAYER_HEALTH,
     PLAYER_RADIUS,
     PLAYER_SPEED,
+    POWER_SHOOT_COOLDOWN,
+    POWER_WEAPON_DURATION,
     SERVER_TICK,
     SHOOT_COOLDOWN,
     SPAWN_POINTS,
@@ -42,6 +47,9 @@ class Player:
     aim_y: float = 0
     last_seen: float = 0
     next_shot_time: float = 0
+    has_power_weapon: bool = False
+    power_weapon_end: float = 0.0
+    was_shooting: bool = False
     keys: dict = field(
         default_factory=lambda: {
             "up": False,
@@ -63,6 +71,16 @@ class Bullet:
     ttl: float = BULLET_TTL
 
 
+@dataclass
+class Pickup:
+    pickup_id: int
+    pickup_type: str
+    x: float
+    y: float
+    active: bool = True
+    respawn_at: float = 0.0
+
+
 class AuthoritativeServer:
     def __init__(self, host="0.0.0.0", port=5000):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -72,14 +90,36 @@ class AuthoritativeServer:
         self.players: dict[int, Player] = {}
         self.address_to_id: dict[tuple[str, int], int] = {}
         self.bullets: list[Bullet] = []
+        self.pickups: list[Pickup] = []
 
         self.next_player_id = 1
+        self.next_pickup_id = 1
 
         self.phase = "waiting"
         self.match_end_time = 0.0
         self.finished_at = 0.0
 
         print(f"Servidor UDP escuchando en {host}:{port}")
+
+    def random_pickup_pos(self):
+        margin = 60
+        x = random.uniform(margin, WIDTH - margin)
+        y = random.uniform(margin, HEIGHT - margin)
+        return x, y
+
+    def spawn_pickups(self):
+        self.pickups.clear()
+        self.next_pickup_id = 1
+
+        for pickup_type in ("weapon", "health"):
+            x, y = self.random_pickup_pos()
+            self.pickups.append(Pickup(
+                pickup_id=self.next_pickup_id,
+                pickup_type=pickup_type,
+                x=x,
+                y=y,
+            ))
+            self.next_pickup_id += 1
 
     def send_to(self, address, message):
         self.sock.sendto(encode_message(message), address)
@@ -219,6 +259,11 @@ class AuthoritativeServer:
             player.hp = PLAYER_HEALTH
             player.score = 0
             player.next_shot_time = 0
+            player.has_power_weapon = False
+            player.power_weapon_end = 0.0
+            player.was_shooting = False
+
+        self.spawn_pickups()
 
         print("Partida iniciada")
 
@@ -258,6 +303,9 @@ class AuthoritativeServer:
 
     def update_game(self, dt, now):
         for player in self.players.values():
+            if player.has_power_weapon and now >= player.power_weapon_end:
+                player.has_power_weapon = False
+
             dx = int(player.keys["right"]) - int(player.keys["left"])
             dy = int(player.keys["down"]) - int(player.keys["up"])
 
@@ -275,12 +323,21 @@ class AuthoritativeServer:
                 HEIGHT - PLAYER_RADIUS,
             )
 
-            if player.keys["shoot"] and now >= player.next_shot_time:
-                self.spawn_bullet(player, now)
+            shooting = player.keys["shoot"]
+
+            if player.has_power_weapon:
+                if shooting and now >= player.next_shot_time:
+                    self.spawn_bullet(player, now, POWER_SHOOT_COOLDOWN)
+            else:
+                if shooting and not player.was_shooting and now >= player.next_shot_time:
+                    self.spawn_bullet(player, now, SHOOT_COOLDOWN)
+
+            player.was_shooting = shooting
 
         self.update_bullets(dt)
+        self.update_pickups(now)
 
-    def spawn_bullet(self, player, now):
+    def spawn_bullet(self, player, now, cooldown):
         start_x = player.x + player.aim_x * (PLAYER_RADIUS + BULLET_RADIUS + 2)
         start_y = player.y + player.aim_y * (PLAYER_RADIUS + BULLET_RADIUS + 2)
 
@@ -294,7 +351,7 @@ class AuthoritativeServer:
 
         self.bullets.append(bullet)
 
-        player.next_shot_time = now + SHOOT_COOLDOWN
+        player.next_shot_time = now + cooldown
 
     def update_bullets(self, dt):
         active_bullets = []
@@ -319,7 +376,7 @@ class AuthoritativeServer:
                 radius = PLAYER_RADIUS + BULLET_RADIUS
 
                 if distance_squared(bullet.x, bullet.y, player.x, player.y) <= radius * radius:
-                    player.hp -= 1
+                    player.hp -= BASE_DAMAGE
                     hit = True
 
                     if player.hp <= 0:
@@ -337,8 +394,32 @@ class AuthoritativeServer:
 
         self.bullets = active_bullets
 
+    def update_pickups(self, now):
+        for pickup in self.pickups:
+            if not pickup.active:
+                if now >= pickup.respawn_at:
+                    pickup.x, pickup.y = self.random_pickup_pos()
+                    pickup.active = True
+                continue
+
+            for player in self.players.values():
+                radius = PLAYER_RADIUS + PICKUP_RADIUS
+                if distance_squared(pickup.x, pickup.y, player.x, player.y) <= radius * radius:
+                    if pickup.pickup_type == "weapon":
+                        player.has_power_weapon = True
+                        player.power_weapon_end = now + POWER_WEAPON_DURATION
+                    elif pickup.pickup_type == "health":
+                        player.hp = PLAYER_HEALTH
+
+                    pickup.active = False
+                    pickup.respawn_at = now + PICKUP_RESPAWN_TIME
+                    break
+
     def respawn_player(self, player):
         player.hp = PLAYER_HEALTH
+        player.has_power_weapon = False
+        player.power_weapon_end = 0.0
+        player.was_shooting = False
         player.x, player.y = random.choice(SPAWN_POINTS)
 
     def build_state(self, now):
@@ -372,6 +453,7 @@ class AuthoritativeServer:
                         round(player.aim_x, 3),
                         round(player.aim_y, 3),
                     ],
+                    "pw": player.has_power_weapon,
                 }
                 for player in self.players.values()
             ],
@@ -382,6 +464,16 @@ class AuthoritativeServer:
                     "y": round(bullet.y, 2),
                 }
                 for bullet in self.bullets
+            ],
+            "pickups": [
+                {
+                    "id": pickup.pickup_id,
+                    "type": pickup.pickup_type,
+                    "x": round(pickup.x, 2),
+                    "y": round(pickup.y, 2),
+                }
+                for pickup in self.pickups
+                if pickup.active
             ],
         }
 

@@ -9,6 +9,7 @@ from common import (
     BULLET_RADIUS,
     CLIENT_INPUT_RATE,
     HEIGHT,
+    PICKUP_RADIUS,
     PLAYER_COLORS,
     PLAYER_HEALTH,
     PLAYER_RADIUS,
@@ -211,10 +212,12 @@ class GameClient:
 
         for player in state.get("players", []):
             marker = "*" if player.get("id") == self.player_id else " "
+            hp_pct = max(0, int(player.get("hp", 0) / PLAYER_HEALTH * 100))
+            pw_tag = " [PW]" if player.get("pw") else ""
             text = (
                 f"{marker} {player.get('name')} | "
-                f"HP {player.get('hp')} | "
-                f"Kills {player.get('score')}"
+                f"HP {hp_pct}% | "
+                f"Kills {player.get('score')}{pw_tag}"
             )
 
             self.draw_text(text, 20, y)
@@ -271,9 +274,11 @@ class GameClient:
             aim_x = int(x + aim[0] * 28)
             aim_y = int(y + aim[1] * 28)
 
+            aim_color = (220, 50, 50) if player.get("pw") else (20, 20, 20)
+
             pygame.draw.line(
                 self.screen,
-                (20, 20, 20),
+                aim_color,
                 (x, y),
                 (aim_x, aim_y),
                 4,
@@ -304,6 +309,29 @@ class GameClient:
                 (x - 22, y - 34, int(hp_width * hp_ratio), 6),
             )
 
+    def draw_pickups(self):
+        with self.state_lock:
+            state = self.state
+
+        if not state:
+            return
+
+        for pickup in state.get("pickups", []):
+            x = int(pickup.get("x", 0))
+            y = int(pickup.get("y", 0))
+            ptype = pickup.get("type")
+
+            if ptype == "weapon":
+                pygame.draw.circle(self.screen, (220, 50, 50), (x, y), PICKUP_RADIUS)
+                pygame.draw.circle(self.screen, (255, 100, 100), (x, y), PICKUP_RADIUS, 2)
+                label = self.font.render("W", True, (255, 255, 255))
+                self.screen.blit(label, (x - label.get_width() // 2, y - label.get_height() // 2))
+            elif ptype == "health":
+                pygame.draw.circle(self.screen, (50, 180, 80), (x, y), PICKUP_RADIUS)
+                pygame.draw.circle(self.screen, (100, 230, 130), (x, y), PICKUP_RADIUS, 2)
+                label = self.font.render("+", True, (255, 255, 255))
+                self.screen.blit(label, (x - label.get_width() // 2, y - label.get_height() // 2))
+
     def draw_bullets(self):
         with self.state_lock:
             state = self.state
@@ -332,6 +360,7 @@ class GameClient:
             4,
         )
 
+        self.draw_pickups()
         self.draw_bullets()
         self.draw_players()
         self.draw_hud()
