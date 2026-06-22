@@ -1,5 +1,6 @@
 import socket
 import sys
+import threading
 import time
 
 import pygame
@@ -11,10 +12,58 @@ from common import (
     PLAYER_COLORS,
     PLAYER_HEALTH,
     PLAYER_RADIUS,
+    PLAYER_SPEED,
     WIDTH,
+    clamp,
     decode_message,
     encode_message,
+    normalize,
 )
+
+
+class LocalPredictor:
+    """Predice la posición local del jugador entre actualizaciones del servidor.
+
+    Aplica la ecuación: pos_predicha = pos_oficial + vel_actual * dt
+    y corrige con interpolación cuando llega un nuevo estado del servidor.
+    """
+
+    def __init__(self):
+        self.predicted_x = 0.0
+        self.predicted_y = 0.0
+        self.initialized = False
+
+    def apply_input(self, keys, dt):
+        if not self.initialized:
+            return
+
+        dx = int(keys["right"]) - int(keys["left"])
+        dy = int(keys["down"]) - int(keys["up"])
+        dx, dy = normalize(dx, dy)
+
+        self.predicted_x = clamp(
+            self.predicted_x + dx * PLAYER_SPEED * dt,
+            PLAYER_RADIUS,
+            WIDTH - PLAYER_RADIUS,
+        )
+        self.predicted_y = clamp(
+            self.predicted_y + dy * PLAYER_SPEED * dt,
+            PLAYER_RADIUS,
+            HEIGHT - PLAYER_RADIUS,
+        )
+
+    def correct(self, server_x, server_y, lerp_factor=0.3):
+        if not self.initialized:
+            self.predicted_x = server_x
+            self.predicted_y = server_y
+            self.initialized = True
+            return
+
+        self.predicted_x += (server_x - self.predicted_x) * lerp_factor
+        self.predicted_y += (server_y - self.predicted_y) * lerp_factor
+
+    def get_position(self):
+        return self.predicted_x, self.predicted_y
 
 
 class GameClient:
@@ -30,6 +79,7 @@ class GameClient:
         self.big_font = pygame.font.SysFont("Arial", 36, bold=True)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("", 0))
         self.sock.setblocking(False)
 
         self.server_address = (server_ip, server_port)
@@ -37,69 +87,97 @@ class GameClient:
         self.name = name[:16]
         self.player_id = None
         self.state = None
+        self.state_lock = threading.Lock()
 
         self.running = True
 
+        self.local_keys = {
+            "up": False,
+            "down": False,
+            "left": False,
+            "right": False,
+            "shoot": False,
+        }
+        self.mouse_pos = (0, 0)
+        self.input_lock = threading.Lock()
+
+        self.predictor = LocalPredictor()
+
         self.last_connect_sent = 0.0
-        self.last_input_sent = 0.0
 
     def send(self, message):
         self.sock.sendto(encode_message(message), self.server_address)
 
     def send_connect(self):
-        self.send(
-            {
-                "type": "connect",
-                "name": self.name,
-            }
-        )
+        self.send({"type": "connect", "name": self.name})
 
-    def send_input(self):
-        if self.player_id is None:
-            return
+    def _send_loop(self):
+        print(f"[{threading.current_thread().name}] Hilo iniciado")
+        while self.running:
+            if self.player_id is not None:
+                with self.input_lock:
+                    keys_copy = dict(self.local_keys)
+                    mouse_x, mouse_y = self.mouse_pos
 
-        keys = pygame.key.get_pressed()
-        mouse_buttons = pygame.mouse.get_pressed()
-        mouse_x, mouse_y = pygame.mouse.get_pos()
+                self.send({
+                    "type": "input",
+                    "id": self.player_id,
+                    "keys": keys_copy,
+                    "aim": [mouse_x, mouse_y],
+                })
 
-        message = {
-            "type": "input",
-            "id": self.player_id,
-            "keys": {
-                "up": keys[pygame.K_w] or keys[pygame.K_UP],
-                "down": keys[pygame.K_s] or keys[pygame.K_DOWN],
-                "left": keys[pygame.K_a] or keys[pygame.K_LEFT],
-                "right": keys[pygame.K_d] or keys[pygame.K_RIGHT],
-                "shoot": mouse_buttons[0],
-            },
-            "aim": [mouse_x, mouse_y],
-        }
+            time.sleep(1 / CLIENT_INPUT_RATE)
 
-        self.send(message)
-
-    def receive_messages(self):
-        while True:
+    def _receive_loop(self):
+        print(f"[{threading.current_thread().name}] Hilo iniciado")
+        while self.running:
             try:
                 data, _ = self.sock.recvfrom(65535)
             except BlockingIOError:
-                break
+                time.sleep(0.001)
+                continue
             except ConnectionResetError:
-                break
+                time.sleep(0.01)
+                continue
 
             message = decode_message(data)
 
             if not isinstance(message, dict):
                 continue
 
-            if message.get("type") == "welcome":
+            msg_type = message.get("type")
+
+            if msg_type == "welcome":
                 self.player_id = message.get("id")
 
-            elif message.get("type") == "state":
-                self.state = message
+            elif msg_type == "state":
+                with self.state_lock:
+                    self.state = message
 
-            elif message.get("type") == "full":
+                if self.player_id is not None:
+                    for player in message.get("players", []):
+                        if player.get("id") == self.player_id:
+                            self.predictor.correct(
+                                player.get("x", 0),
+                                player.get("y", 0),
+                            )
+                            break
+
+            elif msg_type == "full":
                 print(message.get("reason", "Servidor lleno"))
                 self.running = False
+
+    def capture_input(self):
+        keys = pygame.key.get_pressed()
+        mouse_buttons = pygame.mouse.get_pressed()
+
+        with self.input_lock:
+            self.local_keys["up"] = bool(keys[pygame.K_w] or keys[pygame.K_UP])
+            self.local_keys["down"] = bool(keys[pygame.K_s] or keys[pygame.K_DOWN])
+            self.local_keys["left"] = bool(keys[pygame.K_a] or keys[pygame.K_LEFT])
+            self.local_keys["right"] = bool(keys[pygame.K_d] or keys[pygame.K_RIGHT])
+            self.local_keys["shoot"] = bool(mouse_buttons[0])
+            self.mouse_pos = pygame.mouse.get_pos()
 
     def draw_text(self, text, x, y, color=(235, 235, 235), font=None):
         image = (font or self.font).render(str(text), True, color)
@@ -112,12 +190,15 @@ class GameClient:
         self.screen.blit(image, (x, y))
 
     def draw_hud(self):
-        if not self.state:
+        with self.state_lock:
+            state = self.state
+
+        if not state:
             self.draw_text("Conectando al servidor...", 20, 20)
             return
 
-        phase = self.state.get("phase")
-        time_left = self.state.get("time_left", 0)
+        phase = state.get("phase")
+        time_left = state.get("time_left", 0)
 
         self.draw_text(f"ID: {self.player_id}", 20, 16)
         self.draw_text(f"Tiempo: {time_left}s", 20, 40)
@@ -128,7 +209,7 @@ class GameClient:
 
         y += 24
 
-        for player in self.state.get("players", []):
+        for player in state.get("players", []):
             marker = "*" if player.get("id") == self.player_id else " "
             text = (
                 f"{marker} {player.get('name')} | "
@@ -144,20 +225,29 @@ class GameClient:
             self.draw_center_text("Esperando jugadores...", HEIGHT // 2 - 20)
 
         elif phase == "finished":
-            winner_id = self.state.get("winner_id")
+            winner_id = state.get("winner_id")
             self.draw_center_text(
                 f"Partida finalizada - Ganador ID {winner_id}",
                 HEIGHT // 2 - 20,
             )
 
     def draw_players(self):
-        if not self.state:
+        with self.state_lock:
+            state = self.state
+
+        if not state:
             return
 
-        for player in self.state.get("players", []):
+        for player in state.get("players", []):
             player_id = player.get("id")
-            x = int(player.get("x", 0))
-            y = int(player.get("y", 0))
+
+            if player_id == self.player_id and self.predictor.initialized:
+                px, py = self.predictor.get_position()
+                x = int(px)
+                y = int(py)
+            else:
+                x = int(player.get("x", 0))
+                y = int(player.get("y", 0))
 
             color = PLAYER_COLORS.get(player_id, (210, 210, 210))
 
@@ -215,10 +305,13 @@ class GameClient:
             )
 
     def draw_bullets(self):
-        if not self.state:
+        with self.state_lock:
+            state = self.state
+
+        if not state:
             return
 
-        for bullet in self.state.get("bullets", []):
+        for bullet in state.get("bullets", []):
             x = int(bullet.get("x", 0))
             y = int(bullet.get("y", 0))
 
@@ -246,8 +339,18 @@ class GameClient:
         pygame.display.flip()
 
     def run(self):
+        send_thread = threading.Thread(target=self._send_loop, daemon=True)
+        receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
+
+        send_thread.start()
+        receive_thread.start()
+
+        last_frame = time.perf_counter()
+
         while self.running:
             now = time.perf_counter()
+            dt = min(now - last_frame, 0.05)
+            last_frame = now
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -257,22 +360,23 @@ class GameClient:
                 self.send_connect()
                 self.last_connect_sent = now
 
-            if now - self.last_input_sent >= 1 / CLIENT_INPUT_RATE:
-                self.send_input()
-                self.last_input_sent = now
+            self.capture_input()
 
-            self.receive_messages()
+            with self.input_lock:
+                keys_for_prediction = dict(self.local_keys)
+
+            self.predictor.apply_input(keys_for_prediction, dt)
+
             self.render()
 
             self.clock.tick(60)
 
         if self.player_id is not None:
-            self.send(
-                {
-                    "type": "disconnect",
-                    "id": self.player_id,
-                }
-            )
+            self.send({"type": "disconnect", "id": self.player_id})
+
+        self.running = False
+        send_thread.join(timeout=1)
+        receive_thread.join(timeout=1)
 
         pygame.quit()
 
