@@ -1,11 +1,12 @@
 import json
 import math
+import random  # <-- NUEVO para generar estrellas
 
 WIDTH = 960
 HEIGHT = 540
 
 MAX_PLAYERS = 4
-MIN_PLAYERS_TO_START = 2  # Cambie a 1 si quiere probar con un solo cliente.
+MIN_PLAYERS_TO_START = 2
 
 PLAYER_RADIUS = 18
 BULLET_RADIUS = 5
@@ -25,11 +26,15 @@ PICKUP_RADIUS = 14
 PICKUP_RESPAWN_TIME = 10.0
 
 MATCH_SECONDS = 120
+KILLS_TO_WIN = 3
 
 SERVER_TICK = 60
 BROADCAST_RATE = 20
 CLIENT_INPUT_RATE = 30
 DISCONNECT_SECONDS = 10
+
+# NUEVO: Tiempo de cuenta regresiva antes de empezar
+COUNTDOWN_SECONDS = 3
 
 SPAWN_POINTS = [
     (80, 80),
@@ -45,6 +50,14 @@ PLAYER_COLORS = {
     4: (240, 210, 80),
 }
 
+# NUEVO: Colores para naves (más brillantes)
+SHIP_COLORS = {
+    1: (100, 180, 255),  # Azul claro
+    2: (255, 120, 120),  # Rojo claro
+    3: (140, 255, 140),  # Verde claro
+    4: (255, 230, 120),  # Amarillo
+}
+
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
@@ -52,17 +65,14 @@ def clamp(value, minimum, maximum):
 
 def normalize(dx, dy):
     length = math.hypot(dx, dy)
-
     if length == 0:
         return 0, 0
-
     return dx / length, dy / length
 
 
 def distance_squared(ax, ay, bx, by):
     dx = ax - bx
     dy = ay - by
-
     return dx * dx + dy * dy
 
 
