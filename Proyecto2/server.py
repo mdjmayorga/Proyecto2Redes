@@ -17,6 +17,7 @@ from common import (
     MATCH_SECONDS,
     MAX_PLAYERS,
     MIN_PLAYERS_TO_START,
+    OBSTACLES,
     PICKUP_RADIUS,
     PICKUP_RESPAWN_TIME,
     PLAYER_HEALTH,
@@ -29,11 +30,13 @@ from common import (
     SPAWN_POINTS,
     WIDTH,
     KILLS_TO_WIN,
+    circle_rect_overlap,
     clamp,
     decode_message,
     distance_squared,
     encode_message,
     normalize,
+    push_circle_from_rect,
 )
 
 
@@ -117,8 +120,14 @@ class AuthoritativeServer:
 
     def random_pickup_pos(self):
         margin = 60
-        x = random.uniform(margin, WIDTH - margin)
-        y = random.uniform(margin, HEIGHT - margin)
+        for _ in range(200):
+            x = random.uniform(margin, WIDTH - margin)
+            y = random.uniform(margin, HEIGHT - margin)
+            if not any(
+                circle_rect_overlap(x, y, PICKUP_RADIUS, ox, oy, ow, oh)
+                for ox, oy, ow, oh in OBSTACLES
+            ):
+                return x, y
         return x, y
 
     def spawn_pickups(self):
@@ -396,6 +405,11 @@ class AuthoritativeServer:
                 HEIGHT - PLAYER_RADIUS,
             )
 
+            for ox, oy, ow, oh in OBSTACLES:
+                player.x, player.y = push_circle_from_rect(
+                    player.x, player.y, PLAYER_RADIUS, ox, oy, ow, oh
+                )
+
             shooting = player.keys["shoot"]
             if player.has_power_weapon:
                 if shooting and now >= player.next_shot_time:
@@ -456,6 +470,12 @@ class AuthoritativeServer:
             if bullet.ttl <= 0:
                 continue
             if bullet.x < 0 or bullet.x > WIDTH or bullet.y < 0 or bullet.y > HEIGHT:
+                continue
+
+            if any(
+                circle_rect_overlap(bullet.x, bullet.y, BULLET_RADIUS, ox, oy, ow, oh)
+                for ox, oy, ow, oh in OBSTACLES
+            ):
                 continue
 
             hit = False

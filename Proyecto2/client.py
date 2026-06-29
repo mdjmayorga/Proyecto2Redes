@@ -12,6 +12,7 @@ from common import (
     BULLET_RADIUS,
     CLIENT_INPUT_RATE,
     HEIGHT,
+    OBSTACLES,
     PICKUP_RADIUS,
     PLAYER_COLORS,
     SHIP_COLORS,
@@ -27,6 +28,7 @@ from common import (
     decode_message,
     encode_message,
     normalize,
+    push_circle_from_rect,
 )
 
 
@@ -52,6 +54,10 @@ class LocalPredictor:
             PLAYER_RADIUS,
             HEIGHT - PLAYER_RADIUS,
         )
+        for ox, oy, ow, oh in OBSTACLES:
+            self.predicted_x, self.predicted_y = push_circle_from_rect(
+                self.predicted_x, self.predicted_y, PLAYER_RADIUS, ox, oy, ow, oh
+            )
 
     def correct(self, server_x, server_y, lerp_factor=0.3):
         if not self.initialized:
@@ -286,6 +292,26 @@ class GameClient:
 
     def draw_background(self):
         self.screen.blit(self.bg_surface, (0, 0))
+
+    # -------------------------------------------------------------------------
+    # Obstacles
+    # -------------------------------------------------------------------------
+
+    def draw_obstacles(self):
+        for ox, oy, ow, oh in OBSTACLES:
+            # Main concrete body
+            pygame.draw.rect(self.screen, (82, 74, 58), (ox, oy, ow, oh))
+            # Top-left highlight (3D effect)
+            pygame.draw.rect(self.screen, (108, 98, 78), (ox, oy, ow, 4))
+            pygame.draw.rect(self.screen, (100, 90, 72), (ox, oy, 4, oh))
+            # Bottom-right shadow
+            pygame.draw.rect(self.screen, (50, 44, 34), (ox, oy + oh - 4, ow, 4))
+            pygame.draw.rect(self.screen, (56, 50, 40), (ox + ow - 4, oy, 4, oh))
+            # Center horizontal line detail (sandbag separation)
+            my = oy + oh // 2
+            pygame.draw.line(self.screen, (64, 58, 46), (ox + 6, my), (ox + ow - 6, my), 1)
+            # Outer border
+            pygame.draw.rect(self.screen, (36, 32, 24), (ox, oy, ow, oh), 2)
 
     # -------------------------------------------------------------------------
     # HUD
@@ -685,6 +711,7 @@ class GameClient:
 
     def render(self):
         self.draw_background()
+        self.draw_obstacles()
         self.draw_pickups()
         self.draw_bullets()
         self.draw_players()

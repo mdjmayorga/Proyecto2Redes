@@ -85,3 +85,74 @@ def decode_message(data):
         return json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
+
+
+def circle_rect_overlap(cx, cy, r, rx, ry, rw, rh):
+    """True if circle (cx,cy,r) overlaps axis-aligned rect (rx,ry,rw,rh)."""
+    px = clamp(cx, rx, rx + rw)
+    py = clamp(cy, ry, ry + rh)
+    dx = cx - px
+    dy = cy - py
+    return dx * dx + dy * dy < r * r
+
+
+def push_circle_from_rect(cx, cy, r, rx, ry, rw, rh):
+    """Return (cx, cy) with circle pushed outside rect. No-op if no overlap."""
+    px = clamp(cx, rx, rx + rw)
+    py = clamp(cy, ry, ry + rh)
+    dx = cx - px
+    dy = cy - py
+    dist_sq = dx * dx + dy * dy
+    if dist_sq >= r * r:
+        return cx, cy
+    if dist_sq == 0:
+        # Center is inside rect; push out via nearest edge
+        d_left = cx - rx
+        d_right = (rx + rw) - cx
+        d_top = cy - ry
+        d_bottom = (ry + rh) - cy
+        m = min(d_left, d_right, d_top, d_bottom)
+        if m == d_left:
+            return rx - r, cy
+        if m == d_right:
+            return rx + rw + r, cy
+        if m == d_top:
+            return cx, ry - r
+        return cx, ry + rh + r
+    dist = math.sqrt(dist_sq)
+    return cx + (dx / dist) * (r - dist), cy + (dy / dist) * (r - dist)
+
+
+def _generate_obstacles(seed=42):
+    """Generate obstacle rects (x,y,w,h) in the central map zone, away from spawns."""
+    rng = random.Random(seed)
+    result = []
+    max_w, max_h = 72, 56
+    # Central zone: x in [180, 780], y in [150, 390] (away from corners/borders)
+    attempts = 0
+    while len(result) < 6 and attempts < 500:
+        attempts += 1
+        w = rng.randint(42, max_w)
+        h = rng.randint(30, max_h)
+        x = rng.randint(180, 780 - w)
+        y = rng.randint(150, 390 - h)
+        # Reject if too close to any spawn point (70 px exclusion zone)
+        near_spawn = any(
+            x - 70 < sx < x + w + 70 and y - 70 < sy < y + h + 70
+            for sx, sy in SPAWN_POINTS
+        )
+        if near_spawn:
+            continue
+        # Reject if overlaps (with 15 px gap) an already-placed obstacle
+        overlapping = any(
+            x < ox + ow + 15 and x + w > ox - 15 and
+            y < oy + oh + 15 and y + h > oy - 15
+            for ox, oy, ow, oh in result
+        )
+        if overlapping:
+            continue
+        result.append((x, y, w, h))
+    return result
+
+
+OBSTACLES = _generate_obstacles()
