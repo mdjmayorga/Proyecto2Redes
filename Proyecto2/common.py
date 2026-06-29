@@ -1,6 +1,6 @@
 import json
 import math
-import random  # <-- NUEVO para generar estrellas
+import random 
 
 WIDTH = 960
 HEIGHT = 540
@@ -33,7 +33,7 @@ BROADCAST_RATE = 20
 CLIENT_INPUT_RATE = 30
 DISCONNECT_SECONDS = 10
 
-# NUEVO: Tiempo de cuenta regresiva antes de empezar
+
 COUNTDOWN_SECONDS = 3
 
 SPAWN_POINTS = [
@@ -50,12 +50,12 @@ PLAYER_COLORS = {
     4: (240, 210, 80),
 }
 
-# NUEVO: Colores para naves (más brillantes)
+
 SHIP_COLORS = {
-    1: (100, 180, 255),  # Azul claro
-    2: (255, 120, 120),  # Rojo claro
-    3: (140, 255, 140),  # Verde claro
-    4: (255, 230, 120),  # Amarillo
+    1: (100, 180, 255),  
+    2: (255, 120, 120),  
+    3: (140, 255, 140),  
+    4: (255, 230, 120),
 }
 
 

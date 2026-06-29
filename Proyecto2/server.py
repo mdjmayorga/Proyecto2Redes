@@ -102,7 +102,7 @@ class AuthoritativeServer:
         self.next_player_id = 1
         self.next_pickup_id = 1
 
-        # NUEVOS estados: waiting, ready_check, countdown, playing, finished
+        
         self.phase = "waiting"
         self.match_end_time = 0.0
         self.finished_at = 0.0
@@ -210,7 +210,7 @@ class AuthoritativeServer:
 
         player.last_seen = time.perf_counter()
 
-        # Solo procesar inputs si la partida está en curso
+        
         if self.phase != "playing":
             return
 
@@ -231,7 +231,7 @@ class AuthoritativeServer:
                 player.aim_x = aim_x
                 player.aim_y = aim_y
 
-    # NUEVO: manejar mensaje "ready"
+    
     def handle_ready(self, address, message):
         player_id = self.address_to_id.get(address)
         if player_id is None:
@@ -320,14 +320,14 @@ class AuthoritativeServer:
 
     def update_phase(self, dt, now):
         if self.phase == "waiting":
-            # Pasar a ready_check automáticamente cuando haya al menos 2 jugadores
+            
             if len(self.players) >= MIN_PLAYERS_TO_START:
                 self.phase = "ready_check"
                 print("Esperando a que todos los jugadores estén listos...")
             return
 
         if self.phase == "ready_check":
-            # Si algún jugador se desconecta y quedamos con menos de 2, volver a waiting
+            
             if len(self.players) < MIN_PLAYERS_TO_START:
                 self.phase = "waiting"
                 for p in self.players.values():
@@ -354,7 +354,7 @@ class AuthoritativeServer:
 
             self.update_game(dt, now)
 
-            # Verificar si alguien alcanzó KILLS_TO_WIN
+            
             for player in self.players.values():
                 if player.score >= KILLS_TO_WIN:
                     self.finish_match(now, f"¡Jugador {player.name} alcanzó {KILLS_TO_WIN} kills!")
@@ -370,7 +370,7 @@ class AuthoritativeServer:
                 for p in self.players.values():
                     p.ready = False
             elif now - self.finished_at > 8:
-                # Reiniciar automáticamente después de 8 segundos
+               
                 self.phase = "waiting"
                 for p in self.players.values():
                     p.ready = False
@@ -515,7 +515,7 @@ class AuthoritativeServer:
         else:
             time_left = MATCH_SECONDS
 
-        # En ready_check, mostramos cuántos jugadores están listos
+        
         ready_count = sum(1 for p in self.players.values() if p.ready)
 
         return {
