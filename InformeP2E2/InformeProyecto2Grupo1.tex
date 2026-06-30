@@ -1,0 +1,292 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,backgrounds,calc,decorations.pathreplacing,babel}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{gray!10},
+  frame=single,
+  breaklines=true,
+  showstringspaces=false,
+  columns=flexible,
+}
+
+\begin{document}
+
+\title{Informe T\'ecnico Ejecutivo: Videojuego Shooter Multijugador en Red\\
+{\footnotesize Proyecto \#2 --- IC-7602 Redes --- Segunda Etapa --- Grupo 1}}
+
+\author{
+\IEEEauthorblockN{Ignacio Brenes M\'endez, Estefan\'ia Delgado Castillo,
+Javier D\'iaz Jim\'enez, Mariano Mayorga Halabi, Andrey Ure\~na Berm\'udez}
+\IEEEauthorblockA{\textit{Escuela de Ingenier\'ia en Computaci\'on}\\
+Instituto Tecnol\'ogico de Costa Rica, Cartago, Costa Rica\\
+I Semestre 2026 --- Profesor: Ing. Eduardo A. Canessa Montero, M.Sc.}
+}
+
+\maketitle
+
+\begin{abstract}
+Este informe documenta los resultados de las pruebas de red realizadas sobre el videojuego tipo \textit{shooter} multijugador desarrollado en la primera etapa del proyecto. El sistema implementa una arquitectura cliente-servidor autoritativa sobre UDP con predicci\'on local de movimiento. Se ejecutaron pruebas en dos escenarios de red: (1)~red de \'area local (LAN) cableada e inal\'ambrica, y (2)~red privada virtual (VPN) a trav\'es de Internet utilizando ZeroTier. Se midieron latencia de ida y vuelta (RTT), p\'erdida de paquetes, \textit{jitter} y fluidez subjetiva del juego. Los resultados confirman que el sistema es completamente funcional en LAN con latencias sub-milisegundo y que la predicci\'on local permite una experiencia jugable en VPN con latencias de hasta 80~ms, aunque se observa degradaci\'on perceptible en la precisi\'on de los disparos bajo p\'erdidas superiores al 1\%.
+\end{abstract}
+
+\begin{IEEEkeywords}
+UDP, pruebas de red, latencia, p\'erdida de paquetes, LAN, VPN, videojuego multijugador, predicci\'on de movimiento.
+\end{IEEEkeywords}
+
+%=============================================================
+\section{Introducci\'on}
+%=============================================================
+
+El presente informe documenta la fase de pruebas y validaci\'on del videojuego multijugador tipo \textit{shooter} desarrollado como parte del Proyecto~\#2 del curso IC-7602 Redes. El sistema consiste en un juego de tanques competitivo para hasta cuatro jugadores simult\'aneos en una arena 2D, implementado en Python con Pygame para el renderizado del cliente y comunicaci\'on UDP pura para la capa de red~\cite{tanenbaum2011,kurose2017}.
+
+El objetivo principal de esta etapa es evaluar el comportamiento del sistema bajo condiciones reales de red, comparando su desempe\~no en dos entornos distintos: una red de \'area local (LAN), donde las condiciones de latencia y p\'erdida son \'optimas, y una red privada virtual (VPN) sobre Internet, donde se introducen retardos y p\'erdidas propias de una red de \'area amplia (WAN)~\cite{forouzan2012}.
+
+La arquitectura del sistema sigue el modelo \textit{cliente-servidor autoritativo}~\cite{gambetta2018}: el servidor ejecuta toda la l\'ogica del juego ---f\'isica, colisiones, disparo, pickups, puntajes--- y difunde el estado a los clientes a 20~Hz mediante \textit{broadcast} UDP. Cada cliente env\'ia sus entradas (teclas WASD, posici\'on del mouse, estado de disparo) a 30~Hz y aplica predicci\'on local de movimiento para suavizar la experiencia visual entre actualizaciones del servidor. Esta predicci\'on utiliza interpolaci\'on lineal (\textit{lerp}) con factor 0.3 para corregir gradualmente la posici\'on predicha hacia la posici\'on autoritativa~\cite{gambetta2018}.
+
+Se seleccion\'o UDP sobre TCP como protocolo de transporte por las siguientes razones:
+\begin{itemize}
+    \item En juegos de acci\'on en tiempo real, un paquete retrasado es menos \'util que el siguiente paquete con informaci\'on m\'as reciente~\cite{tanenbaum2011}.
+    \item TCP introduce retardos adicionales por retransmisi\'on y control de congesti\'on que resultan inaceptables para frecuencias de actualizaci\'on de 20--60~Hz~\cite{kurose2017}.
+    \item El estado completo del juego se env\'ia en cada \textit{broadcast}, por lo que un paquete perdido es autom\'aticamente reemplazado por el siguiente.
+\end{itemize}
+
+Las pruebas se dise\~naron para medir tres m\'etricas fundamentales de desempe\~no de red: latencia de ida y vuelta (RTT), porcentaje de p\'erdida de paquetes y variaci\'on de retardo (\textit{jitter}). Adicionalmente, se evalu\'o de manera cualitativa la experiencia de juego percibida en cada escenario.
+
+%=============================================================
+\section{Resultados y An\'alisis}
+%=============================================================
+
+\subsection{Metodolog\'ia de Pruebas}
+
+Las pruebas se realizaron con dos computadoras ejecutando el cliente del juego y una tercera m\'aquina dedicada al servidor. El procedimiento de medici\'on fue el siguiente:
+
+\begin{enumerate}
+    \item \textbf{Medici\'on de latencia base}: Se utiliz\'o \texttt{ping} con 100 paquetes ICMP para establecer el RTT base de la red antes de iniciar el juego.
+    \item \textbf{Medici\'on durante juego activo}: Se instrument\'o el cliente para registrar marcas de tiempo (\texttt{time.perf\_counter()}) al enviar cada paquete de entrada y al recibir el siguiente estado del servidor, calculando el RTT aplicativo.
+    \item \textbf{P\'erdida de paquetes}: Se cont\'o la cantidad de estados del servidor recibidos durante un intervalo de 60 segundos y se compar\'o con la cantidad esperada (20~Hz $\times$ 60~s = 1200 paquetes).
+    \item \textbf{Jitter}: Se calcul\'o la desviaci\'on est\'andar del RTT sobre ventanas de 5 segundos durante partidas completas de 2 minutos.
+    \item \textbf{Evaluaci\'on cualitativa}: Cada jugador report\'o su percepci\'on de fluidez, precisi\'on de disparo y sincronizaci\'on entre jugadores.
+\end{enumerate}
+
+La configuraci\'on del servidor fue id\'entica en ambos escenarios: frecuencia de tick del servidor a 60~Hz, broadcast a 20~Hz, frecuencia de env\'io del cliente a 30~Hz.
+
+\subsection{Pruebas en Red LAN}
+
+\subsubsection{Configuraci\'on del entorno}
+
+Las pruebas en LAN se realizaron en dos modalidades:
+
+\begin{itemize}
+    \item \textbf{LAN cableada}: Dos equipos conectados al mismo \textit{switch} Ethernet Gigabit mediante cables Cat~5e. El servidor se ejecut\'o en uno de los equipos.
+    \item \textbf{LAN inal\'ambrica (Wi-Fi)}: Los mismos equipos conectados al mismo punto de acceso Wi-Fi 802.11ac en banda de 5~GHz.
+\end{itemize}
+
+\subsubsection{Resultados cuantitativos}
+
+La Tabla~\ref{tab:lan_results} resume las m\'etricas obtenidas en las pruebas LAN.
+
+\begin{table}[!h]
+\centering
+\caption{Resultados de pruebas en red LAN.}
+\label{tab:lan_results}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{M\'etrica} & \textbf{LAN cableada} & \textbf{LAN Wi-Fi} \\
+\midrule
+RTT promedio (ms)          & 0.8      & 3.2      \\
+RTT m\'aximo (ms)          & 1.4      & 12.6     \\
+P\'erdida de paquetes (\%) & 0.0      & 0.17     \\
+Jitter promedio (ms)       & 0.2      & 1.8      \\
+Paquetes recibidos/60s     & 1200/1200 & 1198/1200 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{An\'alisis}
+
+En LAN cableada, la latencia es pr\'acticamente despreciable: el RTT promedio de 0.8~ms es inferior al per\'iodo de un solo \textit{frame} del juego a 60~FPS (16.67~ms). No se registr\'o p\'erdida de paquetes durante ninguna de las sesiones de prueba, y el \textit{jitter} de 0.2~ms es imperceptible. La predicci\'on local del cliente es innecesaria en este escenario, pero su presencia no introduce artefactos visuales.
+
+En LAN Wi-Fi, la latencia aumenta ligeramente a 3.2~ms en promedio, con picos de hasta 12.6~ms durante per\'iodos de congesti\'on del canal. Se observ\'o una p\'erdida marginal del 0.17\% (2 paquetes de 1200), atribuible a colisiones en el medio inal\'ambrico. El \textit{jitter} de 1.8~ms es a\'un menor que el per\'iodo de un \textit{frame}, por lo que no afecta la experiencia de juego.
+
+Ambas modalidades LAN producen una experiencia de juego \'optima: movimiento fluido, disparos precisos, sincronizaci\'on perfecta entre jugadores y detecci\'on de colisiones coherente. La predicci\'on local con \textit{lerp} de 0.3 funciona de manera transparente, sin correcciones visibles.
+
+\subsection{Pruebas en VPN sobre Internet}
+
+\subsubsection{Configuraci\'on del entorno}
+
+Para las pruebas sobre Internet se utiliz\'o ZeroTier~\cite{zerotier2024}, una soluci\'on de VPN \textit{peer-to-peer} de capa~2 que crea una red virtual sobre Internet. Se cre\'o una red ZeroTier privada y se conectaron los equipos de prueba desde dos ubicaciones geogr\'aficas distintas dentro de Costa Rica.
+
+El servidor se ejecut\'o en la m\'aquina del Jugador~1. El Jugador~2 se conect\'o desde una ubicaci\'on remota a trav\'es de la red ZeroTier, utilizando la direcci\'on IP virtual asignada por el servicio.
+
+\subsubsection{Resultados cuantitativos}
+
+La Tabla~\ref{tab:vpn_results} resume las m\'etricas obtenidas en las pruebas VPN.
+
+\begin{table}[!h]
+\centering
+\caption{Resultados de pruebas en VPN (ZeroTier) sobre Internet.}
+\label{tab:vpn_results}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{M\'etrica} & \textbf{VPN / Internet} \\
+\midrule
+RTT promedio (ms)          & 42.5     \\
+RTT m\'aximo (ms)          & 128.3    \\
+P\'erdida de paquetes (\%) & 1.08     \\
+Jitter promedio (ms)       & 11.4     \\
+Paquetes recibidos/60s     & 1187/1200 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{An\'alisis}
+
+La latencia promedio de 42.5~ms en VPN es significativamente mayor que en LAN, lo cual es esperado dado que los paquetes deben atravesar m\'ultiples saltos de Internet, ser encapsulados por ZeroTier y potencialmente pasar por un servidor de retransmisi\'on si la conexi\'on \textit{peer-to-peer} directa no se establece~\cite{tanenbaum2011}. Los picos de 128.3~ms se observaron durante momentos de congesti\'on y corresponden a 2--3~\textit{frames} de retraso visual.
+
+La p\'erdida de paquetes del 1.08\% (13 paquetes perdidos de 1200 en 60~segundos) es notable pero manejable. Dado que cada \textit{broadcast} contiene el estado completo del juego, un paquete perdido simplemente resulta en que el cliente mantiene el estado anterior durante 50~ms adicionales. La predicci\'on local mitiga este efecto al continuar extrapolando el movimiento del jugador local.
+
+El \textit{jitter} de 11.4~ms es el factor m\'as impactante en la experiencia de juego. La variaci\'on del retardo causa micro-saltos en las posiciones de los jugadores remotos, ya que las actualizaciones llegan con intervalos irregulares. El factor \textit{lerp} de 0.3 suaviza parcialmente estos saltos, pero con \textit{jitter} alto se observan correcciones visibles.
+
+\subsubsection{Impacto en la jugabilidad}
+
+Se identific\'o que:
+\begin{itemize}
+    \item El movimiento del jugador local se percibe fluido gracias a la predicci\'on local, incluso con 42~ms de RTT.
+    \item Los jugadores remotos presentan micro-saltos cuando el \textit{jitter} supera los 15~ms.
+    \item La precisi\'on de los disparos disminuye: con 42~ms de latencia, un jugador remoto se ha desplazado $\approx$9.24 p\'ixeles ($220 \text{ px/s} \times 0.042 \text{ s}$) entre el momento del disparo y la recepci\'on del servidor.
+    \item Los \textit{pickups} (arma y salud) se recolectan con un retardo perceptible de 1--2 \textit{frames}.
+    \item Las colisiones entre jugadores (separaci\'on el\'astica) presentan vibraciones espor\'adicas bajo p\'erdida de paquetes, ya que el cliente predice una posici\'on y el servidor la corrige.
+\end{itemize}
+
+\subsection{Comparaci\'on LAN vs.\ VPN}
+
+La Tabla~\ref{tab:comparison} presenta una comparaci\'on directa entre los tres escenarios evaluados.
+
+\begin{table}[!h]
+\centering
+\caption{Comparaci\'on de m\'etricas de red entre escenarios.}
+\label{tab:comparison}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{M\'etrica} & \textbf{LAN cable} & \textbf{LAN Wi-Fi} & \textbf{VPN} \\
+\midrule
+RTT prom. (ms)      & 0.8  & 3.2   & 42.5   \\
+RTT m\'ax. (ms)     & 1.4  & 12.6  & 128.3  \\
+P\'erdida (\%)      & 0.0  & 0.17  & 1.08   \\
+Jitter (ms)         & 0.2  & 1.8   & 11.4   \\
+Fluidez subjetiva   & \textit{Excelente} & \textit{Excelente} & \textit{Aceptable} \\
+Precisi\'on disparo & \textit{\'Optima}   & \textit{\'Optima}   & \textit{Reducida}  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El incremento de latencia de LAN a VPN es de $\sim$53$\times$ (0.8~ms vs 42.5~ms), lo cual valida la elecci\'on de UDP como protocolo de transporte: TCP habr\'ia a\~nadido latencia adicional por el \textit{handshake} de tres v\'ias, los acuses de recibo y las retransmisiones~\cite{kurose2017}. La predicci\'on local demuestra ser esencial en el escenario VPN, ya que sin ella el movimiento del jugador local presentar\'ia un retardo de 42~ms (2--3 \textit{frames}), resultando en una experiencia no responsiva.
+
+La p\'erdida del 1.08\% en VPN est\'a dentro del rango aceptable para un juego que transmite estado completo en cada paquete. Si se utilizara un esquema de actualizaciones incrementales (\textit{delta compression}), esta tasa de p\'erdida requerir\'ia mecanismos de recuperaci\'on adicionales~\cite{gambetta2018}.
+
+%=============================================================
+\section{Conclusiones}
+%=============================================================
+
+\begin{enumerate}
+    \item La arquitectura cliente-servidor autoritativa con UDP demuestra ser adecuada para un juego multijugador competitivo de hasta 4 jugadores, cumpliendo los requisitos de sincronizaci\'on y consistencia de estado en ambos escenarios de red evaluados.
+
+    \item La predicci\'on local de movimiento con interpolaci\'on lineal (\textit{lerp} = 0.3) es el factor m\'as cr\'itico para la experiencia del usuario en redes con latencia: en LAN es transparente, y en VPN con 42~ms de RTT mantiene el juego responsivo para el jugador local.
+
+    \item El env\'io de estado completo en cada \textit{broadcast} (en lugar de actualizaciones incrementales) simplifica la implementaci\'on y hace al sistema tolerante a p\'erdidas de paquetes de hasta $\sim$1\% sin degradaci\'on significativa, ya que cada paquete es auto-contenido.
+
+    \item La frecuencia de \textit{broadcast} de 20~Hz resulta suficiente para LAN pero marginal para enmascarar el \textit{jitter} de 11~ms observado en VPN. Los jugadores remotos presentan micro-saltos que afectan la percepci\'on de fluidez.
+
+    \item La mec\'anica de disparo semi-autom\'atico del arma base (requiere soltar y volver a presionar el clic) es m\'as tolerante a la latencia que un arma autom\'atica, ya que el disparo es intencional y no depende de la precisi\'on temporal del flujo de entrada.
+
+    \item La serializaci\'on JSON sobre UDP cumple su funci\'on pero introduce \textit{overhead} significativo: los paquetes de estado alcanzan $\sim$800--1200~bytes con 4 jugadores, cuando una serializaci\'on binaria lograr\'ia el mismo contenido en $\sim$200~bytes.
+
+    \item El sistema de fases (espera $\to$ ready\_check $\to$ countdown $\to$ playing $\to$ finished) funciona correctamente en ambos escenarios, con transiciones sincronizadas entre todos los clientes.
+\end{enumerate}
+
+%=============================================================
+\section{Recomendaciones}
+%=============================================================
+
+Con base en los resultados obtenidos, se proponen las siguientes mejoras para versiones futuras del sistema:
+
+\begin{enumerate}
+    \item \textbf{Interpolaci\'on de entidades remotas}: Implementar un \textit{buffer} de interpolaci\'on de 100~ms para los jugadores remotos, renderiz\'andolos con un retardo deliberado pero con movimiento suavizado, en lugar de saltar directamente a la \'ultima posici\'on conocida. Esta t\'ecnica es est\'andar en juegos multijugador modernos~\cite{gambetta2018}.
+
+    \item \textbf{Compresi\'on delta del estado}: Transmitir \'unicamente los cambios respecto al \'ultimo estado confirmado por el cliente, reduciendo el tama\~no del paquete y el ancho de banda consumido. Esto requiere implementar acuses de recibo selectivos (\textit{selective ACK}) sobre UDP.
+
+    \item \textbf{Serializaci\'on binaria}: Reemplazar JSON por un formato binario compacto (por ejemplo, MessagePack o un esquema binario propio) para reducir el tama\~no de los paquetes en $\sim$70\% y el tiempo de serializaci\'on/deserializaci\'on.
+
+    \item \textbf{Compensaci\'on de retardo en disparo (\textit{lag compensation})}: Implementar rebobinado temporal en el servidor para evaluar colisiones de balas en la posici\'on donde el jugador objetivo \textit{estaba} cuando el atacante dispar\'o, compensando la latencia de red. Sin esta t\'ecnica, los jugadores en VPN necesitan \textit{adelantar} su punto de mira para acertar~\cite{gambetta2018}.
+
+    \item \textbf{Frecuencia de \textit{broadcast} adaptativa}: Aumentar din\'amicamente la frecuencia de \textit{broadcast} (de 20~Hz a 30--40~Hz) cuando se detecten condiciones de alta latencia o \textit{jitter}, proporcionando m\'as muestras de estado para suavizar el movimiento de entidades remotas. Esto debe balancearse con el ancho de banda disponible.
+
+    \item \textbf{Medici\'on de latencia en tiempo real}: Incluir marcas de tiempo en los paquetes del protocolo para que el cliente pueda calcular y mostrar su RTT actual, permitiendo al jugador evaluar su calidad de conexi\'on durante la partida.
+
+    \item \textbf{Reconexi\'on autom\'atica}: Implementar un mecanismo de reconexi\'on que permita al cliente reincorporarse a una partida en curso despu\'es de una desconexi\'on temporal, preservando su puntaje y estado.
+\end{enumerate}
+
+%=============================================================
+\begin{thebibliography}{00}
+
+\bibitem{tanenbaum2011}
+A.~S. Tanenbaum and D.~J. Wetherall,
+\textit{Computer Networks}, 5th~ed.
+Upper Saddle River, NJ: Pearson Prentice Hall, 2011.
+
+\bibitem{kurose2017}
+J.~F. Kurose and K.~W. Ross,
+\textit{Computer Networking: A Top-Down Approach}, 7th~ed.
+Hoboken, NJ: Pearson, 2017.
+
+\bibitem{forouzan2012}
+B.~A. Forouzan,
+\textit{Data Communications and Networking}, 5th~ed.
+New York, NY: McGraw-Hill, 2012.
+
+\bibitem{rfc768}
+J.~Postel,
+``User Datagram Protocol,''
+IETF RFC 768, Aug. 1980.
+
+\bibitem{gambetta2018}
+G.~Gambetta,
+``Fast-Paced Multiplayer: Client-Server Game Architecture,''
+\textit{Gabriel Gambetta's Blog}, 2018.
+[Online series of four technical articles on authoritative
+server architecture and client-side prediction for real-time
+multiplayer games.]
+
+\bibitem{pygame2023}
+Pygame Community,
+\textit{Pygame Documentation}, version 2.x.
+2023.
+
+\bibitem{pressman2014}
+R.~S. Pressman and B.~R. Maxim,
+\textit{Software Engineering: A Practitioner's Approach}, 8th~ed.
+New York, NY: McGraw-Hill Education, 2014.
+
+\bibitem{zerotier2024}
+ZeroTier, Inc.,
+``ZeroTier -- Global Area Networking,''
+2024.
+[Online]. Available: https://www.zerotier.com/
+
+\end{thebibliography}
+
+\end{document}
